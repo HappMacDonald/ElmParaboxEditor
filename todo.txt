@@ -1,0 +1,257 @@
+Step #1: I've got to work out a data shape for the level.
+
+
+
+
+== Header:
+Everything before the line with a single -- in it.
+version 4 (only required item)
+attempt_order push,enter,eat,possess (used in Priority area in-game with value "enter,eat,push,possess".)
+shed (enables Shed area behavior)
+inner_push (enables Inner Push area behavior)
+draw_style tui (Text graphics)
+draw_style grid (Like tui, but with blocks instead of text)
+draw_style oldstyle (Gallery area development graphics)
+custom_level_music -1 (-1 means no music)
+custom_level_palette -1 (-1 means no palette is applied)
+
+== Comments: @
+* Apparently lines beginning with @ can be comments?
+* Can also be used at end of a line of level data BUT....
+  ... it hardly matters since everything after a valid line already gets
+  ignored, regardless of presence of @ prefix. :P
+
+== Parameter Values:
+* 0,1 (everywhere I test this, level load crashes for any other value)
+* Integer
+    From a validity perspective, negative zero and positive all allowed.
+    Decimal point invalid even if fractional part is zero.
+    NaN and inf and sci notation NOT allowed here.
+    -0 === 0
+*  -- :
+    leading zero not needed: 0.6 === .6
+    all leading and trailing zeros allowed
+    integer interpreted as  --
+    + sign allowed, but not required.
+    -0 === 0 === NaN (case sensitive, but allowed!)
+    Inf (any case I've tried) NOT allowed.
+    Case insensitive sci notation allowed .. :O
+      Exponent part acts like integer.
+* String Enum: Case sensitive.
+    So far, one or more string tokens is allowed and anything else
+    present for that parameter causes the entire object to self destruct,
+    but level continues to load.
+
+== Nesting / roots / trees
+* "Objects" can have "child objects"
+  This is defined completely by TAB-indentation.
+    spaces will not work
+    Try to avoid malformed tab indentation, like "too many" or
+      "indenting after a wall or other non-parent object". Results will be
+      unstable/undefined but don't seem to crash load.
+  You can define as many "root" objects as you'd like,
+    and they'll all appear to be  -- ing in space, but not be exitable.
+    This will override the " -- inspace" flag,
+      but be overridden by any other ref for this id being an exit-block.
+
+== Blocks
+* In general these are either things that can be pushed from the outside,
+  but that define their interior immediately right here.
+  "Block is push and level", I guess?
+✅Player (really anything can be marked player though...)
+✅Direct child room interior and exterior
+  Being the root of a tree of blocks makes you the "direct child" of nowhere.
+    In this case your internal edges are walls that cannot be penetrated.
+  Having " -- inspace" mark checked makes a room act kind of like the
+    root of a tree.
+      Even though it's set up as the child to something else, it won't
+        act like a child of that thing in the least bit.
+      If room is NOT a root, and NOT referenced by an exit block anywhere,
+        THEN it will exist inside a 7x7 void room
+        (that only gets created when it gets penetrated).
+✅Simple Pushbox (the "fillwithwalls" flag is the easiest way to get one)
+❌Wall
+  Big difference between this and a 1x1 room full of walls is you can't
+  push a wall from the outside. Also, you cannot enter a wall, so it
+  cannot have an "interior" even in principle aside from "solidness" :P
+❌Target to push something onto: "floor button"
+❌Target for player to step on: "floor PlayerButton"
+❌"References" or "Clones":
+  EG: a room that is not defined as a direct child of the current room,
+    it is defined somewhere else. Possibly inside another room, possibly
+    a root room, possibly  -- inspace, possibly elsewhere in parent room.
+  The Reference object defines it's exterior properties.
+  Among those is whether this object can be "exited".
+  Probably at most one Reference to any object anywhere in the universe can be
+    the "exit" object. Trying to make more just means the game picks one
+    through some unknown/unstable algo, and makes that the only "exit" object.
+  Any object not defined as the "exit" object for a given room is a "clone"
+    instead, aka an "enter-only" object.
+❌Infinities, Epsilons, and the like
+  These are just special variants of Reference Objects anyway.
+* Block format (whitespace delim single line):
+  Block x y
+    id width height
+    hue sat val
+    zoomfactor fillwithwalls
+    player possessable playerorder
+    fliph  -- inspace specialeffect
+  "Block" is a token here, every other value is a number.
+  x y: integers. location in the interior of the parent level.
+    Origin appears to be lower-left corner, so +y is up and +x is right.
+    x and y are checked as valid integers, but otherwise ignored if
+      room is a tree root, OR if room has  -- inspace set.
+      I have seen -1 -1 for a tree root room before in an editor's output.
+    If non- -- inspace child, x and y also get checked against parent
+      width x height. Too large or too small (eg, negative) crashes load.
+  id: integer an integer which uniquely identifies the room interior in question.
+    References will call back to this.
+    Traditionally start at zero and increment from there.
+    Negative values allowed.
+    Any ref to an id that doesn't have a matching block crashes level load.
+    A block with the same ID as another block already shown will cause
+      undefined things to happen. Please avoid that.
+  width height: integer interior dimensions of room.
+    I have tested as high as 1024x1024 and game just says "lez goooooo!" :P
+      Although much past 512x512 I can't see the interior objects anymore,
+        could be down to "don't display small object" culling i'unno.
+    Different width vs height just makes an "oblong" room.
+    Even numbers do act like the even number challenge rooms:
+      Namely, one enters 1 step above=+y exact center from either left or right,
+      and one enters 1 step left=+x exact center from either top or bottom.
+    Either dimension being zero has the same effect as "fillwithwalls".
+    Either dimension being negative crashes load.
+  hue sat val: [0-1] fractions defining the color of the block.
+    Appears to act like SL "tint": in that black makes everything pitch black,
+      while white makes everything colorless but interior darker elements can
+      still be seen.
+    Values outside [0-1] appear to clamp to [0-1].
+  zoomfactor: Float  that affects how the camera zooms in on the room when
+    it has focus. I have not tried anything with this yet.
+  fillwithwalls: 0,1 what it says on the tin.
+    Bullies internal dimensions to 1x1, according to docs.
+      not that we could easily tell the difference.
+    Should have an effect indistinguishable from manually filling the room
+      with uninteresting wall tiles.
+    Has effect indistinguishable from either width and/or height being zero.
+    Manual children to this block crash load.
+    Plays sensibly with  -- inspace.
+    Doing this flag on a root room with objects does not crash load,
+      but in my testing set the camera into space fixed on nothing wth :P
+  player: 0,1 defines whether this block STARTS OUT it's life as an avatar block.
+    If the "level" text file has no blocks set as "player" then it will fail to load.
+  possessable: 0,1 defines whether or not this block can become an avatar block later.
+    binary table of above two values:
+      0 0 (neither player nor possessable)
+      1 0 (starts out as player AND is possessable)
+      1 1 (starts out as player AND is possessable)
+      0 1 (Does not start out as player, but is possessable)
+  playerorder: integer
+    It should define which player gets to move first at each move action.
+    It also defines what mouth shape each block gets.
+    When multiple blocks have the same "order", results are undefined.
+      (Namely, game selects which one to move first due to unknown state
+      which can even change DURING a move, causing some players to move
+      multiple times while others might stay put. ;P)
+      Blocks in this case do get the same mouth.
+    When I test 0 & 2 together (no mouth + flat mouth), they act like there
+      is no delay between their moves. (eg: 1=frown that doesn't exist
+        also takes zero frames to move ;P)
+    Face choice:
+      0 = no mouth, or round smile if bonus gets selected in game.
+        (and all negative integers it seems)
+      1 = frown
+      2 = flat
+      3 = Angled/impish grin
+      4 = diagonal slant (upper left to lower right)
+      5 = surprised o/dot mouth
+      6 = strong-bad-like rectangle mouth.
+        (and all larger integers it seems)
+    Negative values and >6 values all appear to "order" sensibly
+      in the standard integer sense.
+  fliph: 0,1 whether or not this block should be horizontally flipped
+    I think this is in relation to one's parent block.
+    Camera fixed on this block at beginning of level means you will see
+      contents per normal orientation, and will see sideways shimmer.
+    I have not yet done any experimenting with this one.
+   -- inspace: 0,1 Act kind of like a tree-root even when you're not one
+    I have confirmed that a room marked as such is simply not present in
+      it's parent room.
+    If room is NOT a root room — and not referenced as a ref exit block
+      anywhere else — then it will get a yellow outline and exist in a
+      void room that gets created on penetration.
+    If this block DOES have a ref exit block ANYWHERE, that will override
+      this flag, AND override being a tree root! wtf xD
+    If room is root, this flag has no effect .. however specialeffect=9
+      has the same effect as this flag only on root rooms. :P
+    Plays sensibly with fillwithwalls.
+  specialeffect: integer
+    AFAICT unrecognized (valid integer) values including negative do nothing.
+    per Zygan — 06/01/2022 (may be slightly wrong, corrections appreciated)
+      1: hardcoded to only function in challenge 38: locks the camera to a specific block
+      2: fake flip effect to the right
+      3: fake flip effect to the left
+      6: hubs only: sets the area name to "intro"
+      8: draw relevant appendix symbols
+      9: allow root to  --  in space? (Happ testing confirms this)
+        Happ testing also confirms no clear effect on child
+          objects that already have " -- inspace" set.
+      10: hubs only: make the block not appear until you've reached the goal of the hub
+      11: hide INTERIOR pane in grid/ascii view.
+        In ascii view, block shows up as "b" instead of a number.
+      12: focus this block when there's multiple players
+      13: hardcoded to only function in multi infinite
+      11(14?): remove infinity/epsilon symbols that are 2 layers deep, for performance
+
+
+== References (including clones, infinities, and epsilons)
+* A reference to a Block that is defined elsewhere in the file.
+  My understanding as of this writing: if it can be pushed but is not a block,
+     then the only remaining possibility is that it is a reference.
+* Ref format (whitespace delim single line):
+  Ref x y id
+    exitblock infexit infexitnum
+    infenter infenternum infenterid
+    player posssessable playerorder
+    fliph  -- inspace specialeffect
+  x y id: integers.. same as block, see above.
+    exitblock: 0,1 should this block be the "real" reference block for this room,
+      the one the player exits when they exit said room's interior?
+      Per my experimentation: if you define no refs to a certain id as "exitblock",
+        then none will be. You will only have cloned external blocks.
+      If you define more than one "exitblock", game will only choose one arbitrarily
+        and force the rest to be clones anyway.
+      "clones" (eg non-"exitblock"s) seem to get an automatic increase in tint lightness.
+      If this gets set ANYWHERE in the level, that will override
+        the  -- inspace flag, AND even override being a tree root!
+    infexit infexitnum: ???????
+    infenter infenternum infenterid: ????????
+    player posssessable playerorder: Should be the same as for Block, see above.
+    fliph  -- inspace specialeffect: Should be the same as for Block, see above.
+
+== Wall
+* format: Wall x y player possessable playerorder
+* All properties here match those for "Block" and "Reference", see above.
+* Wall cannot be pushed from the outside. "Wall is stop".
+* Wall graphically melts into surrounding walls, unlike any other kind of object.
+
+== Floor
+* format: Floor x y type
+-- Not having enough parameters crashes entire load.
+-- Having too many parameters, and extra stuff just gets ignored.
+  x y: Same as everything else
+  type: STRING either PlayerButton or Button.
+    IIUC Baba is you "is win" exactly apply here, since All Buttons and
+      PlayerButtons must be occupied by the right kind of whatever in order
+      for win to occur.
+    That said, when there is exactly 1 PlayerButton: that "is win".
+    "Floor is not push and not stop"
+    Values aside from the above appear to cause the floor button to fail to exist.
+    If there are zero PlayerButtons in a level, then level cannot be completed.
+      Even if all "Button"'s are activated, for some reason.
+    If there are many PlayerButtons in a level, then many player clowns must
+      occupy them all to finish the level.
+    If a PlayerButton and Button occupy the same x y location,
+      then PlayerButton gets rendered but entire level does not appear to be completable.
+    If multiple PlayerButton or multiple Button occupy the same x y location,
+      then game appears to ignore duplicates as though they were never defined.
