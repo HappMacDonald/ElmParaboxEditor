@@ -4,8 +4,8 @@ Step #1: I've got to work out a data shape for the level.
 
 
 == Header:
-Everything before the line with a single -- in it.
-version 4 (only required item)
+Everything before the line with a single # in it.
+version 4 (only required item.. case INsensitive)
 attempt_order push,enter,eat,possess (used in Priority area in-game with value "enter,eat,push,possess".)
 shed (enables Shed area behavior)
 inner_push (enables Inner Push area behavior)
@@ -28,15 +28,21 @@ custom_level_palette -1 (-1 means no palette is applied)
     Decimal point invalid even if fractional part is zero.
     NaN and inf and sci notation NOT allowed here.
     -0 === 0
-*  -- :
+* Float:
+    Gets interpreted as single-precision
+      EG 6-7 decimal digits accuracy confirmed,
+      1e38 allowed and 1e39 not confirmed.
     leading zero not needed: 0.6 === .6
     all leading and trailing zeros allowed
     integer interpreted as  --
     + sign allowed, but not required.
-    -0 === 0 === NaN (case sensitive, but allowed!)
-    Inf (any case I've tried) NOT allowed.
-    Case insensitive sci notation allowed .. :O
-      Exponent part acts like integer.
+    -0 === 0
+    NaN, Infinity, and -Infinity
+      those are case SENSITIVE, and aside from -Infinity
+      none of the signaling values tolerate a prefixed sign
+      of any sort.
+    Case insensitive sci notation also allowed
+      Exponent part parses the same as Integer type above.
 * String Enum: Case sensitive.
     So far, one or more string tokens is allowed and anything else
     present for that parameter causes the entire object to self destruct,
@@ -50,8 +56,8 @@ custom_level_palette -1 (-1 means no palette is applied)
       "indenting after a wall or other non-parent object". Results will be
       unstable/undefined but don't seem to crash load.
   You can define as many "root" objects as you'd like,
-    and they'll all appear to be  -- ing in space, but not be exitable.
-    This will override the " -- inspace" flag,
+    and they'll all appear to be floating in space, but not be exitable.
+    This will override the " floatinspace" flag,
       but be overridden by any other ref for this id being an exit-block.
 
 == Blocks
@@ -62,7 +68,7 @@ custom_level_palette -1 (-1 means no palette is applied)
 ✅Direct child room interior and exterior
   Being the root of a tree of blocks makes you the "direct child" of nowhere.
     In this case your internal edges are walls that cannot be penetrated.
-  Having " -- inspace" mark checked makes a room act kind of like the
+  Having " floatinspace" mark checked makes a room act kind of like the
     root of a tree.
       Even though it's set up as the child to something else, it won't
         act like a child of that thing in the least bit.
@@ -79,7 +85,7 @@ custom_level_palette -1 (-1 means no palette is applied)
 ❌"References" or "Clones":
   EG: a room that is not defined as a direct child of the current room,
     it is defined somewhere else. Possibly inside another room, possibly
-    a root room, possibly  -- inspace, possibly elsewhere in parent room.
+    a root room, possibly floatinspace, possibly elsewhere in parent room.
   The Reference object defines it's exterior properties.
   Among those is whether this object can be "exited".
   Probably at most one Reference to any object anywhere in the universe can be
@@ -95,14 +101,14 @@ custom_level_palette -1 (-1 means no palette is applied)
     hue sat val
     zoomfactor fillwithwalls
     player possessable playerorder
-    fliph  -- inspace specialeffect
+    fliph floatinspace specialeffect
   "Block" is a token here, every other value is a number.
   x y: integers. location in the interior of the parent level.
     Origin appears to be lower-left corner, so +y is up and +x is right.
     x and y are checked as valid integers, but otherwise ignored if
-      room is a tree root, OR if room has  -- inspace set.
+      room is a tree root, OR if room has floatinspace set.
       I have seen -1 -1 for a tree root room before in an editor's output.
-    If non- -- inspace child, x and y also get checked against parent
+    If non-floatinspace child, x and y also get checked against parent
       width x height. Too large or too small (eg, negative) crashes load.
   id: integer an integer which uniquely identifies the room interior in question.
     References will call back to this.
@@ -121,11 +127,17 @@ custom_level_palette -1 (-1 means no palette is applied)
       and one enters 1 step left=+x exact center from either top or bottom.
     Either dimension being zero has the same effect as "fillwithwalls".
     Either dimension being negative crashes load.
-  hue sat val: [0-1] fractions defining the color of the block.
+  hue sat val: 0..1 fractions defining the color of the block.
     Appears to act like SL "tint": in that black makes everything pitch black,
       while white makes everything colorless but interior darker elements can
       still be seen.
-    Values outside [0-1] appear to clamp to [0-1].
+    Colors (especially values) also mathematically compose before rendering,
+      allowing one to interpret values beyond 0..1 as well.
+    ( I tried documenting the zoo of exotic effects one could produce this way,
+      but it was too varied and 80% of the outcomes too boring so I'll
+      leave that for someone else to sleuth out lol!
+      But pro tip: Negative and Signaling Saturation are quite curious!
+    )
   zoomfactor: Float  that affects how the camera zooms in on the room when
     it has focus. I have not tried anything with this yet.
   fillwithwalls: 0,1 what it says on the tin.
@@ -135,7 +147,7 @@ custom_level_palette -1 (-1 means no palette is applied)
       with uninteresting wall tiles.
     Has effect indistinguishable from either width and/or height being zero.
     Manual children to this block crash load.
-    Plays sensibly with  -- inspace.
+    Plays sensibly with floatinspace.
     Doing this flag on a root room with objects does not crash load,
       but in my testing set the camera into space fixed on nothing wth :P
   player: 0,1 defines whether this block STARTS OUT it's life as an avatar block.
@@ -174,7 +186,7 @@ custom_level_palette -1 (-1 means no palette is applied)
     Camera fixed on this block at beginning of level means you will see
       contents per normal orientation, and will see sideways shimmer.
     I have not yet done any experimenting with this one.
-   -- inspace: 0,1 Act kind of like a tree-root even when you're not one
+  floatinspace: 0,1 Act kind of like a tree-root even when you're not one
     I have confirmed that a room marked as such is simply not present in
       it's parent room.
     If room is NOT a root room — and not referenced as a ref exit block
@@ -193,9 +205,9 @@ custom_level_palette -1 (-1 means no palette is applied)
       3: fake flip effect to the left
       6: hubs only: sets the area name to "intro"
       8: draw relevant appendix symbols
-      9: allow root to  --  in space? (Happ testing confirms this)
+      9: allow root to float in space? (Happ testing confirms this)
         Happ testing also confirms no clear effect on child
-          objects that already have " -- inspace" set.
+          objects that already have "floatinspace" set.
       10: hubs only: make the block not appear until you've reached the goal of the hub
       11: hide INTERIOR pane in grid/ascii view.
         In ascii view, block shows up as "b" instead of a number.
@@ -213,7 +225,7 @@ custom_level_palette -1 (-1 means no palette is applied)
     exitblock infexit infexitnum
     infenter infenternum infenterid
     player posssessable playerorder
-    fliph  -- inspace specialeffect
+    fliph floatinspace specialeffect
   x y id: integers.. same as block, see above.
     exitblock: 0,1 should this block be the "real" reference block for this room,
       the one the player exits when they exit said room's interior?
@@ -223,11 +235,11 @@ custom_level_palette -1 (-1 means no palette is applied)
         and force the rest to be clones anyway.
       "clones" (eg non-"exitblock"s) seem to get an automatic increase in tint lightness.
       If this gets set ANYWHERE in the level, that will override
-        the  -- inspace flag, AND even override being a tree root!
+        the floatinspace flag, AND even override being a tree root!
     infexit infexitnum: ???????
     infenter infenternum infenterid: ????????
     player posssessable playerorder: Should be the same as for Block, see above.
-    fliph  -- inspace specialeffect: Should be the same as for Block, see above.
+    fliph floatinspace specialeffect: Should be the same as for Block, see above.
 
 == Wall
 * format: Wall x y player possessable playerorder
