@@ -55,6 +55,18 @@ getPushAttemptString pushAttempt =
     Possess -> "Possess"
 
 
+-- !!!!
+-- -- get this to parse stem via String.startsWith 😵
+-- getPushAttemptFromString : String -> Maybe PushAttempt
+-- getPushAttemptFromString  =
+
+--   case pushAttempt of
+--     Push -> "push"
+--     Enter -> "enter"
+--     Eat -> "eat"
+--     Possess -> "Possess"
+
+
 pushAttemptNormal : OrderedSequence PushAttempt
 pushAttemptNormal =
   OrderedSequence.create [Push, Enter, Eat, Possess]
@@ -294,14 +306,13 @@ floatRegexString =
   )
 
 
+parseDrawStyle : ParseValid oldPayload -> MaybeParse newPayload
+parseDrawStyle parseInput =
+
+
+
 zeroOneBooleanRegexString : String
 zeroOneBooleanRegexString = "^\\s*([01])\\b"
-
-
-parseInteger : ParseValid oldPayload -> MaybeParse (oldPayload, Integer)
-parseInteger parseInput =
-    parseInput
-    |>parseThing integerRegexString String.toInt
 
 
 parseZeroOne : (Boolean -> newPayloadType) -> ParseValid oldPayload -> MaybeParse (oldPayload, newPayloadType)
@@ -348,26 +359,47 @@ parseStripper parseInput =
     Nothing -> Nothing
 
 
+type CaseSensitivity =
+  CaseSensitive
+  | CaseInsensitive
+
+
 -- checks for substring
--- `toMatch` input gets anchored ^ on left for convenience
--- , but is otherwise already considered a regex string.
-parseLandmarkCaseInsensitive : String -> ParseValid oldPayload -> MaybeParse oldPayload
-parseLandmarkCaseInsensitive toMatch (ParseValid oldPayload toParse) =
+-- `toMatch` input gets anchored ^ on left for convenience,
+-- but is otherwise already considered a regex string.
+parseLandmark :
+  CaseSensitivity
+  -> String
+  -> ParseValid oldPayload
+  -> MaybeParse oldPayload
+parseLandmark caseSensitivity toMatch (ParseValid oldPayload toParse) =
   let
     regex =
-      Regex.fromString "^"+ toMatch
+      Regex.fromStringWith
+        { caseInsensitive =
+            (caseSensitivity == CaseInsensitive)
+        , multiline = False
+        }
+        ("^"+ toMatch)
       |>Maybe.withDefault Regex.never
 
   in
-  if toParse |> Regex.contains regex
-    then
-      let
-        parsed =
-          toParse |> Regex.replace regex (always "")
-      in
-        Just (ParseValid oldPayload parsed)
-    else
-      Nothing
+    if toParse |> Regex.contains regex
+      then
+        let
+          parsed =
+            toParse |> Regex.replace regex (always "")
+        in
+          Just (ParseValid oldPayload parsed)
+      else
+        Nothing
+
+
+parseInteger : ParseValid oldPayload -> MaybeParse (oldPayload, Integer)
+parseInteger parseInput =
+    parseInput
+    |>parseThing integerRegexString String.toInt
+
 
 parseFloat : ParseValid oldPayload -> MaybeParse (oldPayload, Float)
 parseFloat parseInput =
@@ -429,35 +461,123 @@ parseOneOf thingsToTry oldParseResult =
               newParseString
 
 
+parseLoopWhile :
+  (ParseValid oldPayload -> ParseValid oldPayload)
+  -> (ParseValid oldPayload -> ParseValid oldPayload)
+  -> List (ParseValid oldPayload -> ParseValid newPayload)
+parseLoopWhile delimiterHandler endMarker parserToRepeat parseInput =
+  let
+    parseStep1 =
+      parseInput
+      |>delimiterHandler
+  in
+    case parseStep1 of
+      Nothing -> Nothing
+      Just parseValidStep1 ->
+        let
+          parseEndCheck =
+            parseValidStep1
+            |>endMarker
+        in
+        case parseEndCheck of
+          Nothing -> -- begin looping against parseValidStep1
+            let
+              loopedParse =
+                parseValidStep1
+                |>parserToRepeat
+            in
+              case loopedParse of
+                Nothing -> Nothing -- failing a looped parse step ends the whole loop
+                Just _ ->
+                  loopedParse
+                  |>parseLoopWhile delimiterHandler endMarker parserToRepeat
+          Just _ ->
+            parseEndCheck -- finish with this output
 
 
--- parseListRootBlocks : Parser (List RootBlock)
--- parseListRootBlocks =
---   Parser.loop [] parseRootBlock
+parseAlways :
+  replacementPayload
+  -> ParseValid oldPayload
+  -> MaybeParse replacementPayload
+parseAlways replacementPayload (ParseValid _ stringToParse) =
+  Maybe (ParseValid replacementPayload stringToParse)
 
 
--- parseRootBlock :
---   List RootBlock
---   -> Parser
---      ( Parser.Step (List RootBlock) (List RootBlock)
---      )
--- parseRootBlock reversedListOfRootBlocks =
---   Parser.oneOf
---   [ Parser.succeed
---       (\rootblock ->
---           Parser.Loop (rootblock :: reversedListOfRootBlocks)
---       )
---     -- |>Parser.oneOf
---     --   [
---     --   ]
---   , discardExplicitComments
---   , Parser.end
---     |>Parser.succeed (always reversedListOfRootBlocks)
---   ]
+parseAttemptOrderArguments :
+  OrderedSequence PushAttempt
+  -> ParseValid Level
+  -> OrderedSequence PushAttempt
+parseAttemptOrderArguments attemptStack inputParseLevel =
+  let
+    parseFirstArgument =
+      inputParseLevel
+      |>parseOneOf
+          [ ( parseAlways Enter )
+          >>( parseLandmark
+                CaseSensitive
+                "enter[^,]*(?:,|$)"
+            )
+          , ( parseAlways Eat )
+          >>( parseLandmark
+                CaseSensitive
+                "eat[^,]*(?:,|$)"
+            )
+          , ( parseAlways Push )
+          >>( parseLandmark
+                CaseSensitive
+                "push[^,]*(?:,|$)"
+            )
+          , ( parseAlways Possess )
+          >>( parseLandmark
+                CaseSensitive
+                "possess[^,]*(?:,|$)"
+            )
+          ]
+  in
+    case parseFirstArgument of
+      Nothing ->
+        OrderedSequence.empty
+
+      Just (ParseValid attemptOrderValue restOfStringToParse) ->
+        ParseValid attemptOrderValue restOfStringToParse
+        |>parseAttemptOrderArguments
+            ( OrderedSequence.cons
+                attemptOrderValue
+                attemptStack
+            )
 
 
-parseLevel : String -> Maybe Level
-parseLevel levelString =
+
+parseAttemptOrder : ParseValid Level -> MaybeParse Level
+parseAttemptOrder inputParseLevel =
+  let
+    (ParseValid inputLevel stringToParse) = inputParseLevel
+    (Version4 headers) = inputLevel
+  in
+    case
+      inputParseLevel
+      -- does NOT tolerate preceding whitespace.
+      -- or anything but single space trailing, for that matter.
+      |>parseLandmark CaseSensitive "attempt_order "
+    of
+      Nothing -> Nothing -- fail if can't find header token at all
+      Just argumentsToParse -> -- found, so do not also need unaltered copy of payload.
+        Just
+          ParseValid
+          ( Version 4
+            { headers
+            | attemptOrder =
+                argumentsToParse
+                |>parseAttemptOrderArguments OrderedSequence.empty
+                -- returns `OrderedSequence PushAttempt` directly
+            }
+          )
+          stringToParse
+        |>discardImplicitComments -- discard already processed header line
+
+
+parseLevelFromString : String -> Maybe Level
+parseLevelFromString levelString =
   ParseValid
       ( Version4
         { attemptOrder = pushAttemptNormal
@@ -471,17 +591,20 @@ parseLevel levelString =
       )
       levelString
   |>discardStartingWhiteSpace
-  |>parseLandmarkCaseInsensitive "version 4" -- no word boundary :P
+  |>parseLandmark CaseInsensitive "version 4" -- no word boundary :P
   |>parseLoopWhile
-      skipToNextRealData -- delimeter handling
-      ( parseLandmarkCaseInsensitive "#" ) -- End of headers
+      -- skipToNextRealData -- delimeter handling
+      identity -- delimeter handling
+      ( parseLandmark CaseSensitive "#" ) -- End of headers
       ( parseOneOf -- checking each header
           [ parseAttemptOrder
-          , parseWrappedBoolean "shed" Shed
-          , parseWrappedBoolean "inner_push" InnerPush
+          , parseZeroOne "shed" Shed
+          , parseZeroOne "inner_push" InnerPush
           , parseDrawStyle
           , parseCustomLevelMusic
           , parseCustomLevelPalette
+          -- If all else fails, whole line is garbage move on.
+          , discardImplicitComments
           ]
       )
   |>discardStartingWhiteSpace

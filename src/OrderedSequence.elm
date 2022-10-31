@@ -11,3 +11,7 @@ create list =
 
 unpack : OrderedSequence a -> List a
 unpack (OrderedSequence list) = list
+
+
+empty : OrderedSequence a
+empty = OrderedSequence []
