@@ -95,7 +95,7 @@ custom_level_palette -1 (-1 means no palette is applied)
     instead, aka an "enter-only" object.
 ❌Infinities, Epsilons, and the like
   These are just special variants of Reference Objects anyway.
-* Block format (whitespace delim single line):
+* Block format (whitespace delim single line)            !!!!!!!!!!!!!!!!!!!!!! Block
   Block x y
     id width height
     hue sat val
@@ -220,7 +220,7 @@ custom_level_palette -1 (-1 means no palette is applied)
 * A reference to a Block that is defined elsewhere in the file.
   My understanding as of this writing: if it can be pushed but is not a block,
      then the only remaining possibility is that it is a reference.
-* Ref format (whitespace delim single line):
+* Ref format (whitespace delim single line):             !!!!!!!!!!!!!!!!!!!!!! Ref
   Ref x y id
     exitblock infexit infexitnum
     infenter infenternum infenterid
@@ -242,13 +242,13 @@ custom_level_palette -1 (-1 means no palette is applied)
     fliph floatinspace specialeffect: Should be the same as for Block, see above.
 
 == Wall
-* format: Wall x y player possessable playerorder
+* format: Wall x y player possessable playerorder        !!!!!!!!!!!!!!!!!!!!!! Wall
 * All properties here match those for "Block" and "Reference", see above.
 * Wall cannot be pushed from the outside. "Wall is stop".
 * Wall graphically melts into surrounding walls, unlike any other kind of object.
 
 == Floor
-* format: Floor x y type
+* format: Floor x y type                                 !!!!!!!!!!!!!!!!!!!!!! Floor
 -- Not having enough parameters crashes entire load.
 -- Having too many parameters, and extra stuff just gets ignored.
   x y: Same as everything else

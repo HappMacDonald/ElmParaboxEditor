@@ -8,6 +8,7 @@ module HSVColor exposing
   , toCssString
   , toColor
   , fromColor
+  , black
   )
 import Color exposing (Color)
 import Basics.Extra
@@ -95,3 +96,7 @@ fromColor color =
     {red, green, blue} = Color.toRgba color
   in
     fromHSV1 0.5 0.5 0.5
+
+
+black : HSVColor
+black = fromHSV1 0 0 0

@@ -99,7 +99,7 @@ type PlayerFlag = PlayerFlag Boolean
 type PossessableFlag = PossessableFlag Boolean
 type Shed = Shed Boolean
 type InnerPush = InnerPush Boolean
-type FlipH = FlipH Boolean
+type FlipHorizontal = FlipHorizontal Boolean
 
 
 type alias PlayerOptions =
@@ -107,6 +107,12 @@ type alias PlayerOptions =
     , possessable : PossessableFlag
     , playerorder : Integer
     }
+
+playerOptionsNone =
+  PlayerOptions
+    (PlayerFlag False)
+    (PossessableFlag False)
+    0
 
 
 type RootBlock =
@@ -117,8 +123,8 @@ type RootBlock =
     , zoomFactor: Float
     -- Presently not allowing root block to be filled with walls
     , playerOptions: PlayerOptions
-    , fliph: FlipH
-    , specialeffect: Integer
+    , flipHorizontal: FlipHorizontal
+    , specialEffect: Integer
     , children: List GameObject
     }
 
@@ -132,8 +138,8 @@ type Block =
     , zoomFactor: Float
     -- Use different "FillWithWalls" object if you want that flag set.
     , playerOptions: PlayerOptions
-    , fliph: FlipH
-    , specialeffect: Integer
+    , flipHorizontal: FlipHorizontal
+    , specialEffect: Integer
     , children: List GameObject
     }
   | InSpaceBlock RootBlock
@@ -147,8 +153,8 @@ type GameObject =
     , color: HSVColor
     , zoomFactor: Float
     , playerOptions: PlayerOptions
-    , fliph: FlipH
-    , specialeffect: Integer
+    , flipHorizontal: FlipHorizontal
+    , specialEffect: Integer
     }
   | Ref
     { id: Integer
@@ -160,8 +166,8 @@ type GameObject =
     , infenternum: Integer
     , infenterid: Integer
     , playerOptions: PlayerOptions
-    , fliph: FlipH
-    , specialeffect: Integer
+    , flipHorizontal: FlipHorizontal
+    , specialEffect: Integer
     }
   | InSpaceRef
     { id: Integer
@@ -172,8 +178,8 @@ type GameObject =
     , infenternum: Integer
     , infenterid: Integer
     , playerOptions: PlayerOptions
-    , fliph: FlipH
-    , specialeffect: Integer
+    , flipHorizontal: FlipHorizontal
+    , specialEffect: Integer
     }
   | Wall
     { position: Position
@@ -233,9 +239,10 @@ discardStartingWhiteSpace (ParseValid payload input) =
   in
     if trimmedInput |> Regex.contains regexNoDataThisLine
     then
-      input
+      ParseValid payload input
       |>discardExplicitComments
-      |>discardStartingWhiteSpace -- recurse on following line
+      |>Maybe.andThen
+          discardStartingWhiteSpace -- recurse on following line
 
     else
       Just (ParseValid payload trimmedInput)
@@ -261,7 +268,8 @@ skipToNextRealData : ParseValid payload -> MaybeParse payload
 skipToNextRealData parseInput =
   parseInput
   |>discardImplicitComments
-  |>discardStartingWhiteSpace
+  |>Maybe.andThen
+      discardStartingWhiteSpace
 
 
 discardExplicitComments : ParseValid payload -> MaybeParse payload
@@ -304,11 +312,6 @@ floatRegexString =
   ++  ")" -- close capture group
   ++  "(?<=[Ny0-9.])(?=[^a-zA-Z0-9.+-]|$)" -- complex word boundary condition
   )
-
-
-parseDrawStyle : ParseValid oldPayload -> MaybeParse newPayload
-parseDrawStyle parseInput =
-
 
 
 zeroOneBooleanRegexString : String
@@ -395,10 +398,21 @@ parseLandmark caseSensitivity toMatch (ParseValid oldPayload toParse) =
         Nothing
 
 
+parseIgnore : MaybeParse (samePayload, a) -> MaybeParse samePayload
+parseIgnore parseInput =
+  Maybe.andThen (\(oldPayload, _) -> oldPayload)
+
+
 parseInteger : ParseValid oldPayload -> MaybeParse (oldPayload, Integer)
 parseInteger parseInput =
     parseInput
     |>parseThing integerRegexString String.toInt
+
+
+parseAndIgnoreInteger : ParseValid samePayload -> MaybeParse samePayload
+parseAndIgnoreInteger parseInput =
+    parseInput
+    |>parseIgnore
 
 
 parseFloat : ParseValid oldPayload -> MaybeParse (oldPayload, Float)
@@ -438,7 +452,7 @@ parseThing regexString toThingLambda (ParseValid payload input) =
 parseOneOf :
   List (ParseValid oldPayload -> MaybeParse newPayload)
   -> ParseValid oldPayload
-  -> MaybeParse (oldPayload, newPayload)
+  -> MaybeParse newPayload
 parseOneOf thingsToTry oldParseResult =
   case thingsToTry of
     [] -> Nothing -- all things to try have failed. D:
@@ -461,10 +475,32 @@ parseOneOf thingsToTry oldParseResult =
               newParseString
 
 
+-- returns "Just payload" if out of non-whitespace data.
+-- returns "Nothing" if there is whitespace data left.
+-- returns payload intact, even w/ whitespace, when there is data left to process.
+notEndOfFile : ParseValid samePayload -> ParseValid samePayload
+notEndOfFile (ParseValid payload toParse) =
+  let
+    regex : Regex
+    regex =
+      "^\\s*$" -- entire string consists only of whitespace
+      |>Regex.fromString
+      |>Maybe.withDefault Regex.never
+
+  in
+    if toParse |> Regex.contains regex
+    then (ParseValid payload toParse)
+    else Nothing
+
+
+
+
 parseLoopWhile :
   (ParseValid oldPayload -> ParseValid oldPayload)
-  -> (ParseValid oldPayload -> ParseValid oldPayload)
-  -> List (ParseValid oldPayload -> ParseValid newPayload)
+  -> (ParseValid oldPayload -> MaybeParse oldPayload)
+  -> (ParseValid oldPayload -> MaybeParse newPayload)
+  -> ParseValid oldPayload
+  -> MaybeParse newPayload
 parseLoopWhile delimiterHandler endMarker parserToRepeat parseInput =
   let
     parseStep1 =
@@ -492,15 +528,170 @@ parseLoopWhile delimiterHandler endMarker parserToRepeat parseInput =
                   loopedParse
                   |>parseLoopWhile delimiterHandler endMarker parserToRepeat
           Just _ ->
-            parseEndCheck -- finish with this output
+            parseValidStep1 -- finish with this output becaus endcheck ruins whitespace
 
 
 parseAlways :
   replacementPayload
   -> ParseValid oldPayload
-  -> MaybeParse replacementPayload
+  -> ParseValid replacementPayload
 parseAlways replacementPayload (ParseValid _ stringToParse) =
-  Maybe (ParseValid replacementPayload stringToParse)
+  ParseValid replacementPayload stringToParse
+
+
+parseSize : ParseValid blockNeedsSize -> MaybeParse blockHasSize
+parseSize inputPayload =
+  let
+    junk =
+      inputPayload
+      |>parseInteger
+      |>parseInteger
+  in
+    case junk of
+      Nothing -> Nothing
+      ParseValid ((blockNeedsSize, height), width) parseOutputString ->
+        ParseValid
+          { blockNeedsSize
+          | size = Size.set width height
+          }
+          parseOutputString
+
+
+parsePlayerOptions :
+  ParseValid blockNeedsPlayerOptions
+  -> MaybeParse blockHasPlayerOptions
+parsePlayerOptions inputPayload =
+  let
+    junk =
+      inputPayload
+      |>parseZeroOne PlayerFlag
+      |>parseZeroOne PossessableFlag
+      |>parseInteger -- playerorder
+  in
+    case junk of
+      Nothing -> Nothing
+      ParseValid
+        ( ( ( blockNeedsPlayerOptions
+            , playerOrder -- Integer
+            )
+            , possessable -- PossessableFlag
+          )
+          , player -- PlayerFlag
+        ) parseOutputString ->
+        ParseValid
+          { blockNeedsPlayerOptions
+          | playerOptions =
+              PlayerOptions player possessable player
+          }
+          parseOutputString
+
+
+parseHSVColor :
+  ParseValid { blockRecord | color : HSVColor }
+  -> MaybeParse { blockRecord | color : HSVColor }
+parseHSVColor inputPayload =
+  let
+    junk =
+      inputPayload
+      |>parseFloat
+      |>parseFloat
+      |>parseFloat
+  in
+    case junk of
+      Nothing -> Nothing
+      ParseValid -- <<< this is a long pattern match vvv
+        (((blockRecordNeedsColor, value), saturation), hue)
+        parseOutputString ->
+          ParseValid
+            { blockRecordNeedsColor
+            | color = HSVColor.fromHSV1 hue saturation value
+            }
+            parseOutputString
+          |>Just
+
+
+parseCustomLevelMusic : ParseValid Level -> MaybeParse Level
+parseCustomLevelMusic (ParseValid level stringToParse) =
+  (ParseValid level stringToParse)
+  |>parseLandmark CaseSensitive "custom_level_music "
+  |>parseInteger
+  |>(\parseResult customLevelMusic ->
+        case parseResult of
+          Nothing -> Nothing
+          (ParseValid _ remainingStringToParse) ->
+            Just
+            ( ParseValid
+              { level
+              | customLevelMusic = customLevelMusic
+              }
+              remainingStringToParse
+            )
+    )
+
+
+parseCustomLevelPalette : ParseValid Level -> MaybeParse Level
+parseCustomLevelPalette (ParseValid level stringToParse) =
+  (ParseValid level stringToParse)
+  |>parseLandmark CaseSensitive "custom_level_palette "
+  |>parseInteger
+  |>(\parseResult customLevelPalette ->
+        case parseResult of
+          Nothing -> Nothing
+          (ParseValid _ remainingStringToParse) ->
+            Just
+            ( ParseValid
+              { level
+              | customLevelPalette = customLevelPalette
+              }
+              remainingStringToParse
+            )
+    )
+
+
+parseDrawStyle : ParseValid Level -> MaybeParse Level
+parseDrawStyle (ParseValid inputLevel stringToParse) =
+  let
+    (Version4 headers) = inputLevel
+    checkCommand =
+      ParseValid inputLevel stringToParse
+      |>parseLandmark CaseSensitive "draw_style "
+  in
+    case checkCommand of
+      Nothing -> Nothing
+      Just argumentsToParse ->
+        argumentsToParse
+        |>parseOneOf
+            [ ( parseAlways DrawStyleTUI )
+            >>( parseLandmark
+                  CaseSensitive
+                  "tui"
+              )
+            , ( parseAlways DrawStyleGrid )
+            >>( parseLandmark
+                  CaseSensitive
+                  "grid"
+              )
+            , ( parseAlways DrawStyleOldStyle )
+            >>( parseLandmark
+                  CaseSensitive
+                  "oldstyle"
+              )
+            ]
+        |>Maybe.withDefault (ParseValid DrawStyleGrid "")
+        |>  (\(ParseValid newDrawStyle _) ->
+                Just
+                  ( ParseValid
+                    ( Version4
+                      { headers
+                      | drawStyle = newDrawStyle
+                      }
+                    )
+                    stringToParse
+                  )
+            )
+        |>Maybe.andThen
+            discardImplicitComments -- discard already processed header line
+
 
 
 parseAttemptOrderArguments :
@@ -563,17 +754,122 @@ parseAttemptOrder inputParseLevel =
       Nothing -> Nothing -- fail if can't find header token at all
       Just argumentsToParse -> -- found, so do not also need unaltered copy of payload.
         Just
-          ParseValid
-          ( Version 4
-            { headers
-            | attemptOrder =
-                argumentsToParse
-                |>parseAttemptOrderArguments OrderedSequence.empty
-                -- returns `OrderedSequence PushAttempt` directly
-            }
+          ( ParseValid
+            ( Version4
+              { headers
+              | attemptOrder =
+                  argumentsToParse
+                  |>parseAttemptOrderArguments OrderedSequence.empty
+                  -- returns `OrderedSequence PushAttempt` directly
+              }
+            )
+            stringToParse
           )
-          stringToParse
-        |>discardImplicitComments -- discard already processed header line
+        |>Maybe.andThen
+            discardImplicitComments -- discard already processed header line
+
+
+parseRootBlocks : ParseValid Level -> MaybeParse Level
+parseRootBlocks (ParseValid (Version4 inputLevel) inputStringToParse) =
+  let
+    -- Curried rootblock template to clone.
+    -- Just add remaining string to parse! :D
+    rootBlockTemplate : String -> ParseValid RootBlock
+    rootBlockTemplate =
+      ParseValid
+      ( RootBlock
+        { id = 0
+        , size = Size.degenerate
+        , color = HSVColor.black
+        , zoomFactor = 1
+        , playerOptions = playerOptionsNone
+        , flipHorizontal = FlipHorizontal False
+        , specialEffect = 0
+        , children = [] -- parseChildBlocks 1 inputLevel
+        }
+      )
+  in
+    ParseValid [] inputStringToParse
+    |>parseLoopWhile
+        identity
+        (notEndOfFile >> Just)
+        (\(ParseValid accumulatorRootBlocks accumulatorStringToParse) ->
+            ( rootBlockTemplate accumulatorStringToParse )
+            |>parseLandmark CaseInsensitive "Block "
+            |>Maybe.andThen
+                parseAndIgnoreInteger -- x coordinate not used for root blocks
+            |>Maybe.andThen
+                parseAndIgnoreInteger -- y coordinate not used for root blocks
+            |>Maybe.andThen
+                parseInteger -- id
+            |>maybeParseMap
+                (\((RootBlock rootBlockNeedsId), id) ->
+                    RootBlock { rootBlockNeedsId | id = id }
+                )
+            |>Maybe.andThen
+                parseSize -- width, height
+            |>maybeParseMap
+                (\(rootBlockNeedswidth, size) ->
+                    { rootBlockNeedswidth | size = size }
+                )
+            |>Maybe.andThen
+                parseHSVColor
+            |>Maybe.andThen
+                parseInteger -- zoomFactor
+            |>maybeParseMap
+                (\(rootBlockNeedszoomFactor, zoomFactor) ->
+                    { rootBlockNeedszoomFactor | zoomFactor = zoomFactor }
+                )
+            |>Maybe.andThen
+                parseAndIgnoreInteger -- fillWithWalls
+            |>Maybe.andThen
+                parsePlayerOptions
+            |>Maybe.andThen
+                (parseZeroOne FlipHorizontal) -- flipHorizontal
+            |>maybeParseMap
+                (\((RootBlock rootBlockNeedsflipHorizontal), flipHorizontal) ->
+                    RootBlock
+                    { rootBlockNeedsflipHorizontal
+                    | flipHorizontal = flipHorizontal
+                    }
+                )
+            |>Maybe.andThen
+                parseInteger -- specialEffect
+            |>maybeParseMap
+                (\((RootBlock rootBlockNeedsspecialEffect), specialEffect) ->
+                    RootBlock { rootBlockNeedsspecialEffect | specialEffect = specialEffect }
+                )
+            -- |>parseChildBlocks
+            -- |>Maybe.andThen
+            --     (\(rootBlockNeedsChildren, children) ->
+            --         { rootBlockNeedsChildren | children = children }
+            --     )
+            |>maybeParseMap -- ball this new rootBlock up with the growing list
+                (\rootBlock ->
+                    rootBlock :: accumulatorRootBlocks
+                )
+        )
+    |>maybeParseMap
+        (\allRootBlocks ->
+            Version4 { inputLevel | level = allRootBlocks }
+        )
+
+
+-- parseChildBlocks :
+-- parseChildBlocks ?? =
+--   ??
+--   |>parseLoopWhile
+--       ??delimiterHandler
+--       ??endMarker (ends on too-little indentation)
+--       ( parseOneOf
+--         [ parseChildBlock
+--         , parseReference
+--         , parseWall
+--         , parseFloor
+--         ]
+--       )
+
+
 
 
 parseLevelFromString : String -> Maybe Level
@@ -591,24 +887,39 @@ parseLevelFromString levelString =
       )
       levelString
   |>discardStartingWhiteSpace
-  |>parseLandmark CaseInsensitive "version 4" -- no word boundary :P
-  |>parseLoopWhile
+  |>Maybe.andThen (parseLandmark CaseInsensitive "version 4") -- no word boundary :P
+  |>Maybe.andThen
+      ( parseLoopWhile
       -- skipToNextRealData -- delimeter handling
-      identity -- delimeter handling
-      ( parseLandmark CaseSensitive "#" ) -- End of headers
-      ( parseOneOf -- checking each header
-          [ parseAttemptOrder
-          , parseZeroOne "shed" Shed
-          , parseZeroOne "inner_push" InnerPush
-          , parseDrawStyle
-          , parseCustomLevelMusic
-          , parseCustomLevelPalette
-          -- If all else fails, whole line is garbage move on.
-          , discardImplicitComments
-          ]
+          identity -- delimeter handling
+          ( parseLandmark CaseSensitive "#" ) -- End of headers
+          ( parseOneOf -- checking each header
+              [ parseAttemptOrder
+    -- problem.. composing curried functions using andThen.. how do? D:
+              , parseLandmark CaseSensitive "shed"
+                >>( Maybe.andThen (parseZeroOne Shed))
+                >>( maybeParseMap
+                      (\(Version4 level, shed) ->
+                          Version4 { level | shed = shed }
+                      )
+                  )
+              , parseLandmark CaseSensitive "inner_push"
+                >>( Maybe.andThen (parseZeroOne InnerPush))
+                >>( maybeParseMap
+                      (\(Version4 level, innerPush) ->
+                          Version4 { level | innerPush = innerPush }
+                      )
+                  )
+              , parseDrawStyle
+              , parseCustomLevelMusic
+              , parseCustomLevelPalette
+              -- If all else fails, whole line is garbage move on.
+              , discardImplicitComments
+              ]
+          )
       )
-  |>discardStartingWhiteSpace
-  |>ParseRootBlocks
+  |>Maybe.andThen discardStartingWhiteSpace
+  |>Maybe.andThen parseRootBlocks
   |>parseStripper
 
 

@@ -5,6 +5,7 @@ module Size exposing
   , getWidth
   , getHeight
   , getList
+  , degenerate
   )
 
 type alias Integer = Int -- Abbreviations are bad.
@@ -34,3 +35,5 @@ getList : Size -> List Integer
 getList (Size width height)=
   [width, height]
 
+degenerate : Size
+degenerate = Size 0 0
