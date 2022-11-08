@@ -82,6 +82,7 @@ custom_level_palette -1 (-1 means no palette is applied)
   cannot have an "interior" even in principle aside from "solidness" :P
 ❌Target to push something onto: "floor button"
 ❌Target for player to step on: "floor PlayerButton"
+❌Target for player to display a message: "floor Info <string>"
 ❌"References" or "Clones":
   EG: a room that is not defined as a direct child of the current room,
     it is defined somewhere else. Possibly inside another room, possibly

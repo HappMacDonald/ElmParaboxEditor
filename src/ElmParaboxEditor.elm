@@ -9,7 +9,7 @@ import Html.Attributes as Attributes
 import Html.Events exposing (onClick)
 import Task exposing (Task)
 import Size exposing (Size)
-import Position exposing (Position)
+import Position as Position exposing (Position)
 import OrderedSequence exposing (OrderedSequence)
 import HSVColor exposing (HSVColor)
 import List
@@ -87,12 +87,13 @@ getDrawStyleString drawStyle =
     DrawStyleOldStyle -> "oldstyle"
 
 
-type FloorButtonType = FloorButton | FloorPlayerButton
+type FloorButtonType = FloorButton | FloorPlayerButton | FloorInfo String
 getFloorButtonTypeString : FloorButtonType -> String
 getFloorButtonTypeString floorButtonType =
   case floorButtonType of
     FloorButton -> "Button"
     FloorPlayerButton -> "PlayerButton"
+    FloorInfo text -> "Info " ++ text
 
 
 type PlayerFlag = PlayerFlag Boolean
@@ -539,73 +540,104 @@ parseAlways replacementPayload (ParseValid _ stringToParse) =
   ParseValid replacementPayload stringToParse
 
 
-parseSize : ParseValid blockNeedsSize -> MaybeParse blockHasSize
-parseSize inputPayload =
+parseSize :
+  ParseValid RootBlock
+  -> MaybeParse RootBlock
+parseSize oldPayload =
   let
     junk =
-      inputPayload
+      oldPayload
       |>parseInteger
-      |>parseInteger
+      |>Maybe.andThen parseInteger
   in
     case junk of
       Nothing -> Nothing
-      ParseValid ((blockNeedsSize, height), width) parseOutputString ->
-        ParseValid
-          { blockNeedsSize
-          | size = Size.set width height
-          }
-          parseOutputString
+      ParseValid
+        ( ( (RootBlock blockNeedsSize)
+          , height
+          )
+        , width
+        )
+        parseOutputString
+        ->
+        let
+          maybeSize = Size.set width height
+        in
+          case maybeSize of
+            Size.Negative -> Nothing
+            Size.Valid size ->
+              ParseValid
+                ( RootBlock
+                  { blockNeedsSize | size = size }
+                )
+                parseOutputString
+              |>Just
 
 
 parsePlayerOptions :
-  ParseValid blockNeedsPlayerOptions
-  -> MaybeParse blockHasPlayerOptions
+  ParseValid RootBlock
+  -> MaybeParse RootBlock
 parsePlayerOptions inputPayload =
   let
     junk =
       inputPayload
       |>parseZeroOne PlayerFlag
-      |>parseZeroOne PossessableFlag
-      |>parseInteger -- playerorder
+      |>Maybe.andThen (parseZeroOne PossessableFlag)
+      |>Maybe.andThen parseInteger -- playerorder
   in
     case junk of
       Nothing -> Nothing
-      ParseValid
-        ( ( ( blockNeedsPlayerOptions
-            , playerOrder -- Integer
+      Just
+        ( ParseValid
+          ( ( ( (RootBlock blockNeedsPlayerOptions)
+              , player -- PlayerFlag
+              )
+              , possessable -- PossessableFlag
             )
-            , possessable -- PossessableFlag
-          )
-          , player -- PlayerFlag
-        ) parseOutputString ->
+            , playerOrder -- Integer
+          ) parseOutputString
+        ) ->
         ParseValid
-          { blockNeedsPlayerOptions
-          | playerOptions =
-              PlayerOptions player possessable player
-          }
+          ( RootBlock
+            { blockNeedsPlayerOptions
+            | playerOptions =
+                PlayerOptions player possessable playerOrder
+            }
+          )
           parseOutputString
+        |>Just
 
 
 parseHSVColor :
-  ParseValid { blockRecord | color : HSVColor }
-  -> MaybeParse { blockRecord | color : HSVColor }
+  ParseValid RootBlock
+  -> MaybeParse RootBlock
 parseHSVColor inputPayload =
   let
     junk =
       inputPayload
       |>parseFloat
-      |>parseFloat
-      |>parseFloat
+      |>Maybe.andThen parseFloat
+      |>Maybe.andThen parseFloat
   in
     case junk of
       Nothing -> Nothing
-      ParseValid -- <<< this is a long pattern match vvv
-        (((blockRecordNeedsColor, value), saturation), hue)
-        parseOutputString ->
+      Just
+        ( ParseValid -- <<< this is a long pattern match vvv
+          ( ( ( (RootBlock blockRecordNeedsColor)
+              , hue
+              )
+            , saturation
+            )
+          , value
+          )
+          parseOutputString
+        ) ->
           ParseValid
-            { blockRecordNeedsColor
-            | color = HSVColor.fromHSV1 hue saturation value
-            }
+            ( RootBlock
+              { blockRecordNeedsColor
+              | color = HSVColor.fromHSV1 hue saturation value
+              }
+            )
             parseOutputString
           |>Just
 
@@ -634,7 +666,7 @@ parseCustomLevelPalette (ParseValid level stringToParse) =
   (ParseValid level stringToParse)
   |>parseLandmark CaseSensitive "custom_level_palette "
   |>parseInteger
-  |>(\parseResult customLevelPalette ->
+  |>(\(parseResult, (Version4 customLevelPalette)) ->
         case parseResult of
           Nothing -> Nothing
           (ParseValid _ remainingStringToParse) ->
@@ -808,17 +840,13 @@ parseRootBlocks (ParseValid (Version4 inputLevel) inputStringToParse) =
                 )
             |>Maybe.andThen
                 parseSize -- width, height
-            |>maybeParseMap
-                (\(rootBlockNeedswidth, size) ->
-                    { rootBlockNeedswidth | size = size }
-                )
             |>Maybe.andThen
                 parseHSVColor
             |>Maybe.andThen
-                parseInteger -- zoomFactor
+                parseFloat -- zoomFactor
             |>maybeParseMap
-                (\(rootBlockNeedszoomFactor, zoomFactor) ->
-                    { rootBlockNeedszoomFactor | zoomFactor = zoomFactor }
+                (\((RootBlock rootBlockNeedszoomFactor), zoomFactor) ->
+                    RootBlock { rootBlockNeedszoomFactor | zoomFactor = zoomFactor }
                 )
             |>Maybe.andThen
                 parseAndIgnoreInteger -- fillWithWalls
