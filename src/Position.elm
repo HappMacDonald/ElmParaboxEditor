@@ -1,6 +1,6 @@
 module Position exposing
   ( Position
-  , Maybe
+  , Maybe(..)
   , set
   , getX
   , getY

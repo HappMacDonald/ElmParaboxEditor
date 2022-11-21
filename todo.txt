@@ -7,6 +7,21 @@ Step #1: I've got to work out a data shape for the level.
 Everything before the line with a single # in it.
 version 4 (only required item.. case INsensitive)
 attempt_order push,enter,eat,possess (used in Priority area in-game with value "enter,eat,push,possess".)
+✅=is parsed as presented
+🍰=partial parse
+❌=entire attempt_order line gets ignored, but level processing continues
+💀=level processing crashes
+--✅ attempt_order possess
+--❌ attempt_order Possess
+--❌ attempt_order possess,
+--✅ attempt_order possess ,
+--✅ attempt_order possess;
+--❌ attempt_order ,possess
+--✅ attempt_order possess,eat
+--❌ attempt_order possess,,eat
+--❌ attempt_order possess, eat
+--🍰 attempt_order possess ,eat
+--❌ attempt_order possess;eat
 shed (enables Shed area behavior)
 inner_push (enables Inner Push area behavior)
 draw_style tui (Text graphics)

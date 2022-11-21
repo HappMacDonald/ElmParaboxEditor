@@ -15,6 +15,7 @@ import HSVColor exposing (HSVColor)
 import List
 -- import Parser exposing ((|.), (|=), Parser)
 import Regex exposing (Regex)
+import Tuple
 
 -- Fixing some elm defects via metalanguage attempts :P
 type alias Boolean = Bool -- Abbreviations are bad.
@@ -203,53 +204,54 @@ type Level =
   , level : List RootBlock
   }
 
+-- A list of error strings in reverse chrono order
+type alias ParseErrors = List String
 
-type ParseValid payload =
-    ParseValid payload String
+-- wrapper combinging data already parsed with text remaining to parse next.
+type ParseValid payload = ParseValid payload String
+type alias ParseResult payload = Result ParseErrors (ParseValid payload)
+
+parseChompAndWrap : String -> Regex -> payload -> ParseResult payload
+parseChompAndWrap stringLeftToParse regexToDelete payload =
+  Ok
+  ( ParseValid
+      payload
+      ( stringLeftToParse
+      |>Regex.replace regexToDelete (always "")
+      )
+  )
 
 
-type alias MaybeParse payload = Maybe (ParseValid payload)
-
-
-parseChompAndWrap : String -> Regex -> payload -> ParseValid payload
-parseChompAndWrap inputString regex object =
-  ParseValid
-    object
-    ( inputString
-    |>Regex.replace regex (always "")
-    )
-
-
-discardWhiteSpace : ParseValid payload -> MaybeParse payload
+discardWhiteSpace : ParseValid payload -> ParseResult payload
 discardWhiteSpace (ParseValid payload input) =
   String.trimLeft input
   |>ParseValid payload
-  |>Just -- MaybeParse
+  |>Ok -- ParseResult
 
 
 -- Only skips whitespace or explicit comments until it gets to
 -- data on a real data line.
-discardStartingWhiteSpace : ParseValid payload -> MaybeParse payload
+discardStartingWhiteSpace : ParseValid payload -> ParseResult payload
 discardStartingWhiteSpace (ParseValid payload input) =
   let
     regexNoDataThisLine =
-      Regex.fromString "^@|\\n"
+      Regex.fromString "^(@|\\n)"
       |>Maybe.withDefault Regex.never
 
     trimmedInput = String.trimLeft input
+    -- _ = Debug.log "discardStartingWhiteSpace" payload
   in
     if trimmedInput |> Regex.contains regexNoDataThisLine
     then
-      ParseValid payload input
-      |>discardExplicitComments
-      |>Maybe.andThen
-          discardStartingWhiteSpace -- recurse on following line
+      Ok (ParseValid payload input)
+      |>Result.andThen discardExplicitComments
+      |>Result.andThen discardStartingWhiteSpace -- recurse on following line
 
     else
-      Just (ParseValid payload trimmedInput)
+      Ok (ParseValid payload trimmedInput)
 
 
-discardImplicitComments : ParseValid payload -> MaybeParse payload
+discardImplicitComments : ParseValid payload -> ParseResult payload
 discardImplicitComments (ParseValid payload input) =
   let
     implicitCommentsRegex : Regex
@@ -258,22 +260,21 @@ discardImplicitComments (ParseValid payload input) =
       |>Maybe.withDefault Regex.never
   in
     Regex.replace implicitCommentsRegex (always "") input
-    |> ParseValid payload
-    |>Just -- MaybeParse
+    |>ParseValid payload
+    |>Ok -- ParseResult
 
 
 -- Skips implicit comments on current line,
 -- and then any explicit comments or whitespace-only lines
 -- AND start-of-line whitespace until it gets back to data on a real data line.
-skipToNextRealData : ParseValid payload -> MaybeParse payload
+skipToNextRealData : ParseResult payload -> ParseResult payload
 skipToNextRealData parseInput =
   parseInput
-  |>discardImplicitComments
-  |>Maybe.andThen
-      discardStartingWhiteSpace
+  |>Result.andThen discardImplicitComments
+  |>Result.andThen discardStartingWhiteSpace
 
 
-discardExplicitComments : ParseValid payload -> MaybeParse payload
+discardExplicitComments : ParseValid payload -> ParseResult payload
 discardExplicitComments (ParseValid payload input) =
   let
     atSignRegex : Regex
@@ -286,11 +287,12 @@ discardExplicitComments (ParseValid payload input) =
         input
         |>Regex.replace atSignRegex (always "")
         |>ParseValid payload
-        |>discardImplicitComments -- MaybeParse
+        |>Ok -- has to be on a new line to allow previous line to curry
+        |>Result.andThen discardImplicitComments -- ParseResult
       else
         input -- no match
         |>ParseValid payload
-        |>Just -- MaybeParse
+        |>Ok -- ParseResult
 
 
 integerRegexString : String
@@ -319,10 +321,13 @@ zeroOneBooleanRegexString : String
 zeroOneBooleanRegexString = "^\\s*([01])\\b"
 
 
-parseZeroOne : (Boolean -> newPayloadType) -> ParseValid oldPayload -> MaybeParse (oldPayload, newPayloadType)
-parseZeroOne monoidWrapper parseInput =
+parseZeroOne :
+  (Boolean -> newPayloadType)
+  -> ParseResult oldPayload
+  -> ParseResult (oldPayload, newPayloadType)
+parseZeroOne monadWrapper parseInput =
   let
-    zeroOneStringToMaybeBoolean :  String -> Maybe Boolean
+    zeroOneStringToMaybeBoolean : String -> Maybe Boolean
     zeroOneStringToMaybeBoolean zeroOneString =
       case zeroOneString of
         "0" -> Just False
@@ -330,37 +335,43 @@ parseZeroOne monoidWrapper parseInput =
         _ -> Nothing
   in
     parseInput
-    |>parseThing
-        zeroOneBooleanRegexString
-        zeroOneStringToMaybeBoolean
-    |>maybeParseMap monoidWrapper
+    |>Result.andThen
+        ( parseThing
+            zeroOneBooleanRegexString
+            zeroOneStringToMaybeBoolean
+        )
+    |>parseResultMap
+        (\(oldPayload, boolean) -> (oldPayload, monadWrapper boolean) )
 
 
--- Does a non-maybe operation to the payload of a MaybeParse,
--- returns an identical MaybeParse but with just the payload changed.
+-- Does a non-result operation to the payload of a ParseResult,
+-- returns an identical ParseResult but with Ok the payload changed.
 -- Namely, remaining parse text gets carried smoothly along.
-maybeParseMap : (oldPayload -> newPayload) -> MaybeParse oldPayload -> MaybeParse newPayload
-maybeParseMap lambda parseInput =
+parseResultMap :
+  (oldPayload -> newPayload)
+  -> ParseResult oldPayload
+  -> ParseResult newPayload
+parseResultMap lambda parseInput =
   case parseInput of
-    Nothing -> Nothing
-    Just (ParseValid payload remainder) ->
-      Just (ParseValid (lambda payload) remainder)
+    Err errors -> Err errors
+    Ok (ParseValid payload remainder) ->
+      Ok (ParseValid (lambda payload) remainder)
 
 
 -- I'm leaning toward "won't need this one" due to one above..
 -- .. but leaving unfinished bit here in case I waffle back again.
--- maybeParsePayloadCombine : ((a, b) -> c) -> MaybeParse (a, b) -> MaybeParse c
--- maybeParsePayloadCombine combiner input =
+-- ParseResultPayloadCombine : ((a, b) -> c) -> ParseResult (a, b) -> ParseResult c
+-- ParseResultPayloadCombine combiner input =
 
 
 
 -- This kills any possible remaining parse text metadata btw, lol
 -- Might make more strict later and fail on non-empty text *shrugs*
-parseStripper : MaybeParse payload -> Maybe payload
+parseStripper : ParseResult payload -> Result ParseErrors payload
 parseStripper parseInput =
   case parseInput of
-    (ParseValid payload _) -> Just payload
-    Nothing -> Nothing
+    Ok (ParseValid payload _) -> Ok payload
+    Err errors -> Err errors
 
 
 type CaseSensitivity =
@@ -375,7 +386,7 @@ parseLandmark :
   CaseSensitivity
   -> String
   -> ParseValid oldPayload
-  -> MaybeParse oldPayload
+  -> ParseResult oldPayload
 parseLandmark caseSensitivity toMatch (ParseValid oldPayload toParse) =
   let
     regex =
@@ -384,7 +395,7 @@ parseLandmark caseSensitivity toMatch (ParseValid oldPayload toParse) =
             (caseSensitivity == CaseInsensitive)
         , multiline = False
         }
-        ("^"+ toMatch)
+        ("^"++ toMatch)
       |>Maybe.withDefault Regex.never
 
   in
@@ -394,39 +405,43 @@ parseLandmark caseSensitivity toMatch (ParseValid oldPayload toParse) =
           parsed =
             toParse |> Regex.replace regex (always "")
         in
-          Just (ParseValid oldPayload parsed)
+          Ok (ParseValid oldPayload parsed)
       else
-        Nothing
+        Err ["Parsing failed at `"++ toMatch ++"`"]
 
 
-parseIgnore : MaybeParse (samePayload, a) -> MaybeParse samePayload
+parseIgnore : ParseResult (samePayload, a) -> ParseResult samePayload
 parseIgnore parseInput =
-  Maybe.andThen (\(oldPayload, _) -> oldPayload)
+  parseInput
+  |>parseResultMap (\(oldPayload, _) -> oldPayload)
 
 
-parseInteger : ParseValid oldPayload -> MaybeParse (oldPayload, Integer)
+parseInteger : ParseResult oldPayload -> ParseResult (oldPayload, Integer)
 parseInteger parseInput =
     parseInput
-    |>parseThing integerRegexString String.toInt
+    |>Result.andThen
+        (parseThing integerRegexString String.toInt)
 
 
-parseAndIgnoreInteger : ParseValid samePayload -> MaybeParse samePayload
+parseAndIgnoreInteger : ParseResult samePayload -> ParseResult samePayload
 parseAndIgnoreInteger parseInput =
     parseInput
+    |>parseInteger
     |>parseIgnore
 
 
-parseFloat : ParseValid oldPayload -> MaybeParse (oldPayload, Float)
+parseFloat : ParseResult oldPayload -> ParseResult (oldPayload, Float)
 parseFloat parseInput =
   parseInput
-  |>parseThing floatRegexString stringToFloatIncludingSignals
+  |>Result.andThen
+      (parseThing floatRegexString stringToFloatIncludingSignals)
 
 
 parseThing :
   String
   -> (String -> Maybe newPayload)
   -> ParseValid oldPayload
-  -> MaybeParse (oldPayload, newPayload)
+  -> ParseResult (oldPayload, newPayload)
 parseThing regexString toThingLambda (ParseValid payload input) =
   let
     regex =
@@ -438,48 +453,71 @@ parseThing regexString toThingLambda (ParseValid payload input) =
     case matches of
       [{submatches}] ->
         case submatches of
-          [] -> Nothing -- MaybeParse
-          Nothing :: _ -> Nothing -- MaybeParse
+          -- ParseResult
+          [] ->
+            Err
+              [ "Regex parse failed looking for `"
+              ++ regexString
+              ++"`: submatches empty list"
+              ]
+
+          -- ParseResult
+          Nothing :: _ ->
+            Err
+              [ "Regex parse failed looking for `"
+              ++ regexString
+              ++"`: submatch was `Nothing`"
+              ]
+
           Just rawMatchString :: _ ->
             case toThingLambda rawMatchString of
-              Nothing -> Nothing -- MaybeParse
+              -- ParseResult
+              Nothing ->
+                Err
+                  [ "Regex parse found match, did not fit type for `"
+                  ++ regexString
+                  ++"`"
+                  ]
+
               Just matchedResult ->
                 parseChompAndWrap
                   input regex (payload, matchedResult)
-                |>Just -- MaybeParse
-      default -> Nothing -- MaybeParse
+      -- ParseResult
+      _ -> Err ["parseThing match was not a 'Match' type? Weird."]
 
 
 parseOneOf :
-  List (ParseValid oldPayload -> MaybeParse newPayload)
+  List (ParseValid oldPayload -> ParseResult newPayload)
   -> ParseValid oldPayload
-  -> MaybeParse newPayload
-parseOneOf thingsToTry oldParseResult =
+  -> ParseResult (oldPayload, newPayload)
+parseOneOf thingsToTry (ParseValid oldPayload oldParseString) =
   case thingsToTry of
-    [] -> Nothing -- all things to try have failed. D:
+    -- all things to try have failed. D:
+    [] -> Err ["parseOneOf ran out of things to try"]
+
     firstThingToTry :: restOfThingsToTry ->
       let
-        (ParseValid oldPayload _) =
-          oldParseResult
-
         firstNewResult =
-          firstThingToTry oldPayload
+          firstThingToTry (ParseValid oldPayload oldParseString)
       in
         case firstNewResult of
-          Nothing -> -- try remainder of things.
-            parseOneOf restOfThingsToTry oldPayload
+          Err _ -> -- try remainder of things.
+            parseOneOf
+              restOfThingsToTry
+              (ParseValid oldPayload oldParseString)
 
-          Just (ParseValid newPayload newParseString) ->
-            Just
-              ParseValid
-              (oldPayload, newPayload)
-              newParseString
+          Ok (ParseValid newPayload newParseString) ->
+            Ok
+              ( ParseValid
+                (oldPayload, newPayload)
+                newParseString
+              )
 
 
--- returns "Just payload" if out of non-whitespace data.
--- returns "Nothing" if there is whitespace data left.
+-- returns "Ok payload" if out of non-whitespace data.
+-- returns "Err _" if there is non-whitespace data left.
 -- returns payload intact, even w/ whitespace, when there is data left to process.
-notEndOfFile : ParseValid samePayload -> ParseValid samePayload
+notEndOfFile : ParseValid samePayload -> ParseResult samePayload
 notEndOfFile (ParseValid payload toParse) =
   let
     regex : Regex
@@ -490,104 +528,111 @@ notEndOfFile (ParseValid payload toParse) =
 
   in
     if toParse |> Regex.contains regex
-    then (ParseValid payload toParse)
-    else Nothing
+    then Ok (ParseValid payload toParse)
+    else
+      Err
+        [ "You shouldn't be reading this"
+        , "but there is still more stuff to parse."
+        ]
 
 
 
 
 parseLoopWhile :
-  (ParseValid oldPayload -> ParseValid oldPayload)
-  -> (ParseValid oldPayload -> MaybeParse oldPayload)
-  -> (ParseValid oldPayload -> MaybeParse newPayload)
-  -> ParseValid oldPayload
-  -> MaybeParse newPayload
+  (ParseValid payload -> ParseResult payload)
+  -> (ParseValid payload -> ParseResult eofGarbage)
+  -> (ParseValid payload -> ParseResult payload)
+  -> ParseValid payload
+  -> ParseResult payload
 parseLoopWhile delimiterHandler endMarker parserToRepeat parseInput =
   let
     parseStep1 =
       parseInput
       |>delimiterHandler
+
+    parseEndCheck =
+      parseStep1
+      |>Result.andThen endMarker
   in
-    case parseStep1 of
-      Nothing -> Nothing
-      Just parseValidStep1 ->
-        let
-          parseEndCheck =
-            parseValidStep1
-            |>endMarker
-        in
-        case parseEndCheck of
-          Nothing -> -- begin looping against parseValidStep1
-            let
-              loopedParse =
-                parseValidStep1
-                |>parserToRepeat
-            in
-              case loopedParse of
-                Nothing -> Nothing -- failing a looped parse step ends the whole loop
-                Just _ ->
-                  loopedParse
-                  |>parseLoopWhile delimiterHandler endMarker parserToRepeat
-          Just _ ->
-            parseValidStep1 -- finish with this output becaus endcheck ruins whitespace
+  case parseEndCheck of
+    Err _ -> -- begin looping against ParseResultStep1
+      let
+        errOkLoopedParse =
+          parseStep1
+          |>Result.andThen parserToRepeat
+      in
+        case errOkLoopedParse of
+          Err errors -> Err errors -- failing a looped parse step ends the whole loop
+          Ok loopedParse ->
+            loopedParse
+            |>parseLoopWhile
+                delimiterHandler
+                endMarker
+                parserToRepeat
+    Ok _ ->
+      parseStep1 -- finish with this output becaus endcheck ruins whitespace
 
 
 parseAlways :
   replacementPayload
   -> ParseValid oldPayload
-  -> ParseValid replacementPayload
+  -> ParseResult replacementPayload
 parseAlways replacementPayload (ParseValid _ stringToParse) =
-  ParseValid replacementPayload stringToParse
+  Ok (ParseValid replacementPayload stringToParse)
 
 
 parseSize :
-  ParseValid RootBlock
-  -> MaybeParse RootBlock
+  ParseResult RootBlock
+  -> ParseResult RootBlock
 parseSize oldPayload =
   let
     junk =
       oldPayload
       |>parseInteger
-      |>Maybe.andThen parseInteger
+      |>parseInteger
   in
     case junk of
-      Nothing -> Nothing
-      ParseValid
-        ( ( (RootBlock blockNeedsSize)
-          , height
+      Err errors -> Err errors
+
+      Ok
+        ( ParseValid
+          ( ( (RootBlock blockNeedsSize)
+            , height
+            )
+          , width
           )
-        , width
-        )
-        parseOutputString
-        ->
-        let
-          maybeSize = Size.set width height
-        in
-          case maybeSize of
-            Size.Negative -> Nothing
-            Size.Valid size ->
-              ParseValid
-                ( RootBlock
-                  { blockNeedsSize | size = size }
+          parseOutputString
+        ) ->
+          let
+            maybeSize = Size.set width height
+          in
+            case maybeSize of
+              Size.Negative -> Err ["parseSize called on a negative size"]
+              Size.Valid size ->
+                ( Ok
+                  ( ParseValid
+                    ( RootBlock
+                      { blockNeedsSize | size = size }
+                    )
+                    parseOutputString
+                  )
                 )
-                parseOutputString
-              |>Just
 
 
 parsePlayerOptions :
-  ParseValid RootBlock
-  -> MaybeParse RootBlock
+  ParseResult RootBlock
+  -> ParseResult RootBlock
 parsePlayerOptions inputPayload =
   let
     junk =
       inputPayload
       |>parseZeroOne PlayerFlag
-      |>Maybe.andThen (parseZeroOne PossessableFlag)
-      |>Maybe.andThen parseInteger -- playerorder
+      |>(parseZeroOne PossessableFlag)
+      |>parseInteger -- playerorder
   in
     case junk of
-      Nothing -> Nothing
-      Just
+      Err errors -> Err errors
+      Ok
         ( ParseValid
           ( ( ( (RootBlock blockNeedsPlayerOptions)
               , player -- PlayerFlag
@@ -597,31 +642,33 @@ parsePlayerOptions inputPayload =
             , playerOrder -- Integer
           ) parseOutputString
         ) ->
-        ParseValid
-          ( RootBlock
-            { blockNeedsPlayerOptions
-            | playerOptions =
-                PlayerOptions player possessable playerOrder
-            }
+        ( Ok
+          ( ParseValid
+            ( RootBlock
+              { blockNeedsPlayerOptions
+              | playerOptions =
+                  PlayerOptions player possessable playerOrder
+              }
+            )
+            parseOutputString
           )
-          parseOutputString
-        |>Just
+        )
 
 
 parseHSVColor :
-  ParseValid RootBlock
-  -> MaybeParse RootBlock
+  ParseResult RootBlock
+  -> ParseResult RootBlock
 parseHSVColor inputPayload =
   let
     junk =
       inputPayload
       |>parseFloat
-      |>Maybe.andThen parseFloat
-      |>Maybe.andThen parseFloat
+      |>parseFloat
+      |>parseFloat
   in
     case junk of
-      Nothing -> Nothing
-      Just
+      Err errors -> Err errors
+      Ok
         ( ParseValid -- <<< this is a long pattern match vvv
           ( ( ( (RootBlock blockRecordNeedsColor)
               , hue
@@ -632,149 +679,176 @@ parseHSVColor inputPayload =
           )
           parseOutputString
         ) ->
-          ParseValid
-            ( RootBlock
-              { blockRecordNeedsColor
-              | color = HSVColor.fromHSV1 hue saturation value
-              }
-            )
-            parseOutputString
-          |>Just
-
-
-parseCustomLevelMusic : ParseValid Level -> MaybeParse Level
-parseCustomLevelMusic (ParseValid level stringToParse) =
-  (ParseValid level stringToParse)
-  |>parseLandmark CaseSensitive "custom_level_music "
-  |>parseInteger
-  |>(\parseResult customLevelMusic ->
-        case parseResult of
-          Nothing -> Nothing
-          (ParseValid _ remainingStringToParse) ->
-            Just
+          ( Ok
             ( ParseValid
-              { level
-              | customLevelMusic = customLevelMusic
-              }
-              remainingStringToParse
+              ( RootBlock
+                { blockRecordNeedsColor
+                | color = HSVColor.fromHSV1 hue saturation value
+                }
+              )
+              parseOutputString
             )
-    )
+          )
 
 
-parseCustomLevelPalette : ParseValid Level -> MaybeParse Level
-parseCustomLevelPalette (ParseValid level stringToParse) =
-  (ParseValid level stringToParse)
+parseCustomLevelMusic : ParseValid Level -> ParseResult Level
+parseCustomLevelMusic (ParseValid inputLevel stringToParse) =
+  (ParseValid inputLevel stringToParse)
   |>parseLandmark CaseSensitive "custom_level_palette "
   |>parseInteger
-  |>(\(parseResult, (Version4 customLevelPalette)) ->
+  |>(\parseResult ->
         case parseResult of
-          Nothing -> Nothing
-          (ParseValid _ remainingStringToParse) ->
-            Just
+          Err errors -> Err errors
+          Ok (ParseValid ((Version4 levelRecords), customLevelMusic) remainingStringToParse) ->
+            Ok
             ( ParseValid
-              { level
-              | customLevelPalette = customLevelPalette
-              }
+              ( Version4
+                { levelRecords
+                | customLevelMusic = customLevelMusic
+                }
+              )
               remainingStringToParse
             )
     )
 
 
-parseDrawStyle : ParseValid Level -> MaybeParse Level
+parseCustomLevelPalette : ParseValid Level -> ParseResult Level
+parseCustomLevelPalette (ParseValid inputLevel stringToParse) =
+  (ParseValid inputLevel stringToParse)
+  |>parseLandmark CaseSensitive "custom_level_palette "
+  |>parseInteger
+  |>parseResultMap
+      (\( (Version4 levelRecords), customLevelPalette ) ->
+        ( ( Version4
+            { levelRecords
+            | customLevelPalette = customLevelPalette
+            }
+          )
+        )
+      )
+
+
+parseDrawStyle : ParseValid Level -> ParseResult Level
 parseDrawStyle (ParseValid inputLevel stringToParse) =
   let
     (Version4 headers) = inputLevel
     checkCommand =
-      ParseValid inputLevel stringToParse
-      |>parseLandmark CaseSensitive "draw_style "
+      Ok (ParseValid inputLevel stringToParse)
+      |>Result.andThen
+          ( parseLandmark CaseSensitive "draw_style " )
   in
     case checkCommand of
-      Nothing -> Nothing
-      Just argumentsToParse ->
+      Err errors -> Err errors
+      Ok argumentsToParse ->
         argumentsToParse
         |>parseOneOf
             [ ( parseAlways DrawStyleTUI )
-            >>( parseLandmark
-                  CaseSensitive
-                  "tui"
+            >>( Result.andThen
+                ( parseLandmark
+                    CaseSensitive
+                    "tui"
+                )
               )
             , ( parseAlways DrawStyleGrid )
-            >>( parseLandmark
-                  CaseSensitive
-                  "grid"
+            >>( Result.andThen
+                ( parseLandmark
+                    CaseSensitive
+                    "grid"
+                )
               )
             , ( parseAlways DrawStyleOldStyle )
-            >>( parseLandmark
-                  CaseSensitive
-                  "oldstyle"
+            >>( Result.andThen
+                ( parseLandmark
+                    CaseSensitive
+                    "oldstyle"
+                )
               )
             ]
-        |>Maybe.withDefault (ParseValid DrawStyleGrid "")
-        |>  (\(ParseValid newDrawStyle _) ->
-                Just
-                  ( ParseValid
-                    ( Version4
-                      { headers
-                      | drawStyle = newDrawStyle
-                      }
-                    )
-                    stringToParse
+        |>Result.withDefault (ParseValid (inputLevel, DrawStyleGrid) "")
+        |>(\(ParseValid (_, newDrawStyle) _) ->
+              Ok
+                ( ParseValid
+                  ( Version4
+                    { headers
+                    | drawStyle = newDrawStyle
+                    }
                   )
-            )
-        |>Maybe.andThen
+                  stringToParse
+                )
+          )
+        |>Result.andThen
             discardImplicitComments -- discard already processed header line
 
 
-
+-- Current problem:
+-- Aside from types matching after call to `Tuple.second`,
+-- I've got to figure out how this recursion really should bottom out.
 parseAttemptOrderArguments :
-  OrderedSequence PushAttempt
-  -> ParseValid Level
+  ParseResult (OrderedSequence PushAttempt)
   -> OrderedSequence PushAttempt
-parseAttemptOrderArguments attemptStack inputParseLevel =
+parseAttemptOrderArguments parseAttemptStack =
   let
-    parseFirstArgument =
-      inputParseLevel
-      |>parseOneOf
-          [ ( parseAlways Enter )
-          >>( parseLandmark
-                CaseSensitive
-                "enter[^,]*(?:,|$)"
-            )
-          , ( parseAlways Eat )
-          >>( parseLandmark
-                CaseSensitive
-                "eat[^,]*(?:,|$)"
-            )
-          , ( parseAlways Push )
-          >>( parseLandmark
-                CaseSensitive
-                "push[^,]*(?:,|$)"
-            )
-          , ( parseAlways Possess )
-          >>( parseLandmark
-                CaseSensitive
-                "possess[^,]*(?:,|$)"
-            )
-          ]
+    parseResultFirstArgument =
+      parseAttemptStack
+      |>Result.andThen
+          ( parseOneOf
+              [ ( parseAlways Enter )
+              >>( Result.andThen
+                    ( parseLandmark
+                        CaseSensitive
+                        "enter[^,]*(?:,|$)"
+                    )
+                )
+              , ( parseAlways Eat )
+              >>( Result.andThen
+                    ( parseLandmark
+                        CaseSensitive
+                        "eat[^,]*(?:,|$)"
+                    )
+                )
+              , ( parseAlways Push )
+              >>( Result.andThen
+                    ( parseLandmark
+                        CaseSensitive
+                        "push[^,]*(?:,|$)"
+                    )
+                )
+              , ( parseAlways Possess )
+              >>( Result.andThen
+                    ( parseLandmark
+                        CaseSensitive
+                        "possess[^,]*(?:,|$)"
+                    )
+                )
+              ]
+          )
   in
-    case parseFirstArgument of
-      Nothing ->
-        OrderedSequence.empty
+    case parseAttemptStack of
+      Err _ -> pushAttemptNormal
 
-      Just (ParseValid attemptOrderValue restOfStringToParse) ->
-        ParseValid attemptOrderValue restOfStringToParse
-        |>parseAttemptOrderArguments
-            ( OrderedSequence.cons
-                attemptOrderValue
-                attemptStack
+      (Ok (ParseValid attemptStack _)) ->
+        case parseResultFirstArgument of
+          Err _ ->
+            attemptStack
+
+          Ok (ParseValid (_, attemptOrderValue) restOfStringToParse) ->
+            ( Ok
+              ( ParseValid
+                ( OrderedSequence.cons
+                    attemptOrderValue
+                    attemptStack
+                )
+                restOfStringToParse
+              )
             )
+            |>parseAttemptOrderArguments
 
 
 
-parseAttemptOrder : ParseValid Level -> MaybeParse Level
+parseAttemptOrder : ParseValid Level -> ParseResult Level
 parseAttemptOrder inputParseLevel =
   let
-    (ParseValid inputLevel stringToParse) = inputParseLevel
+    (ParseValid inputLevel inputStringToParse) = inputParseLevel
     (Version4 headers) = inputLevel
   in
     case
@@ -783,29 +857,29 @@ parseAttemptOrder inputParseLevel =
       -- or anything but single space trailing, for that matter.
       |>parseLandmark CaseSensitive "attempt_order "
     of
-      Nothing -> Nothing -- fail if can't find header token at all
-      Just argumentsToParse -> -- found, so do not also need unaltered copy of payload.
-        Just
+      Err errors -> Err errors -- fail if can't find header token at all
+      Ok (ParseValid _ remainingStringToParse) -> -- found, so do not also need unaltered copy of payload.
+        Ok
           ( ParseValid
             ( Version4
               { headers
               | attemptOrder =
-                  argumentsToParse
-                  |>parseAttemptOrderArguments OrderedSequence.empty
+                  (Ok (ParseValid OrderedSequence.empty remainingStringToParse))
+                  |>parseAttemptOrderArguments
                   -- returns `OrderedSequence PushAttempt` directly
               }
             )
-            stringToParse
+            inputStringToParse
           )
-        |>Maybe.andThen
+        |>Result.andThen
             discardImplicitComments -- discard already processed header line
 
 
-parseRootBlocks : ParseValid Level -> MaybeParse Level
+parseRootBlocks : ParseValid Level -> ParseResult Level
 parseRootBlocks (ParseValid (Version4 inputLevel) inputStringToParse) =
   let
     -- Curried rootblock template to clone.
-    -- Just add remaining string to parse! :D
+    -- Ok add remaining string to parse! :D
     rootBlockTemplate : String -> ParseValid RootBlock
     rootBlockTemplate =
       ParseValid
@@ -820,64 +894,56 @@ parseRootBlocks (ParseValid (Version4 inputLevel) inputStringToParse) =
         , children = [] -- parseChildBlocks 1 inputLevel
         }
       )
+      -- stringLeftToParse not defined here,
+      -- it will be obtained later via curry.
   in
     ParseValid [] inputStringToParse
     |>parseLoopWhile
-        identity
-        (notEndOfFile >> Just)
+        Ok -- Wrap ParseValid into ParseResult
+        notEndOfFile
         (\(ParseValid accumulatorRootBlocks accumulatorStringToParse) ->
             ( rootBlockTemplate accumulatorStringToParse )
             |>parseLandmark CaseInsensitive "Block "
-            |>Maybe.andThen
-                parseAndIgnoreInteger -- x coordinate not used for root blocks
-            |>Maybe.andThen
-                parseAndIgnoreInteger -- y coordinate not used for root blocks
-            |>Maybe.andThen
-                parseInteger -- id
-            |>maybeParseMap
+            |>parseAndIgnoreInteger -- x coordinate not used for root blocks
+            |>parseAndIgnoreInteger -- y coordinate not used for root blocks
+            |>parseInteger -- id
+            |>parseResultMap
                 (\((RootBlock rootBlockNeedsId), id) ->
                     RootBlock { rootBlockNeedsId | id = id }
                 )
-            |>Maybe.andThen
-                parseSize -- width, height
-            |>Maybe.andThen
-                parseHSVColor
-            |>Maybe.andThen
-                parseFloat -- zoomFactor
-            |>maybeParseMap
+            |>parseSize -- width, height
+            |>parseHSVColor
+            |>parseFloat -- zoomFactor
+            |>parseResultMap
                 (\((RootBlock rootBlockNeedszoomFactor), zoomFactor) ->
                     RootBlock { rootBlockNeedszoomFactor | zoomFactor = zoomFactor }
                 )
-            |>Maybe.andThen
-                parseAndIgnoreInteger -- fillWithWalls
-            |>Maybe.andThen
-                parsePlayerOptions
-            |>Maybe.andThen
-                (parseZeroOne FlipHorizontal) -- flipHorizontal
-            |>maybeParseMap
+            |>parseAndIgnoreInteger -- fillWithWalls
+            |>parsePlayerOptions
+            |>parseZeroOne FlipHorizontal -- flipHorizontal
+            |>parseResultMap
                 (\((RootBlock rootBlockNeedsflipHorizontal), flipHorizontal) ->
                     RootBlock
                     { rootBlockNeedsflipHorizontal
                     | flipHorizontal = flipHorizontal
                     }
                 )
-            |>Maybe.andThen
-                parseInteger -- specialEffect
-            |>maybeParseMap
+            |>parseInteger -- specialEffect
+            |>parseResultMap
                 (\((RootBlock rootBlockNeedsspecialEffect), specialEffect) ->
                     RootBlock { rootBlockNeedsspecialEffect | specialEffect = specialEffect }
                 )
             -- |>parseChildBlocks
-            -- |>Maybe.andThen
+            -- |>Result.andThen
             --     (\(rootBlockNeedsChildren, children) ->
             --         { rootBlockNeedsChildren | children = children }
             --     )
-            |>maybeParseMap -- ball this new rootBlock up with the growing list
+            |>parseResultMap -- ball this new rootBlock up with the growing list
                 (\rootBlock ->
                     rootBlock :: accumulatorRootBlocks
                 )
         )
-    |>maybeParseMap
+    |>parseResultMap
         (\allRootBlocks ->
             Version4 { inputLevel | level = allRootBlocks }
         )
@@ -900,40 +966,40 @@ parseRootBlocks (ParseValid (Version4 inputLevel) inputStringToParse) =
 
 
 
-parseLevelFromString : String -> Maybe Level
+parseLevelFromString : String -> ParseResult Level
 parseLevelFromString levelString =
-  ParseValid
-      ( Version4
-        { attemptOrder = pushAttemptNormal
-        , shed = Shed False
-        , innerPush = InnerPush False
-        , drawStyle = DrawStyleGrid
-        , customLevelMusic = -1
-        , customLevelPalette = -1
-        , level = []
-        }
-      )
-      levelString
-  |>discardStartingWhiteSpace
-  |>Maybe.andThen (parseLandmark CaseInsensitive "version 4") -- no word boundary :P
-  |>Maybe.andThen
+  Ok
+    ( ParseValid
+        ( Version4
+          { attemptOrder = pushAttemptNormal
+          , shed = Shed False
+          , innerPush = InnerPush False
+          , drawStyle = DrawStyleGrid
+          , customLevelMusic = -1
+          , customLevelPalette = -1
+          , level = []
+          }
+        )
+        levelString
+    )
+  |>Result.andThen discardStartingWhiteSpace
+  |>Result.andThen (parseLandmark CaseInsensitive "version 4") -- no word boundary :P
+  |>Result.andThen
       ( parseLoopWhile
-      -- skipToNextRealData -- delimeter handling
-          identity -- delimeter handling
+          Ok -- delimeter handling (monad wrapping identity)
           ( parseLandmark CaseSensitive "#" ) -- End of headers
           ( parseOneOf -- checking each header
               [ parseAttemptOrder
-    -- problem.. composing curried functions using andThen.. how do? D:
               , parseLandmark CaseSensitive "shed"
-                >>( Maybe.andThen (parseZeroOne Shed))
-                >>( maybeParseMap
+                >>( parseZeroOne Shed )
+                >>( parseResultMap
                       (\(Version4 level, shed) ->
                           Version4 { level | shed = shed }
                       )
                   )
               , parseLandmark CaseSensitive "inner_push"
-                >>( Maybe.andThen (parseZeroOne InnerPush))
-                >>( maybeParseMap
+                >>( parseZeroOne InnerPush )
+                >>( parseResultMap
                       (\(Version4 level, innerPush) ->
                           Version4 { level | innerPush = innerPush }
                       )
@@ -944,11 +1010,12 @@ parseLevelFromString levelString =
               -- If all else fails, whole line is garbage move on.
               , discardImplicitComments
               ]
+            >>(parseResultMap Tuple.second)
           )
       )
-  |>Maybe.andThen discardStartingWhiteSpace
-  |>Maybe.andThen parseRootBlocks
-  |>parseStripper
+  |>Result.andThen discardImplicitComments
+  |>Result.andThen discardStartingWhiteSpace
+  -- |>Result.andThen parseRootBlocks
 
 
 
@@ -970,14 +1037,11 @@ main =
 -- MODEL
 
 
-type alias Model =
-  { levelText : Maybe String
-  }
-
+type alias Model = ParseResult Level
 
 init : () -> (Model, Cmd Msg)
 init _ =
-  ( Model Nothing, Cmd.none )
+  ( Err ["Level not yet loaded"], Cmd.none )
 
 
 
@@ -1005,7 +1069,7 @@ update msg model =
       )
 
     LevelLoaded levelString ->
-      ( { model | levelText = Just levelString }
+      ( Debug.log "Level" (parseLevelFromString levelString)
       , Cmd.none
       )
 
@@ -1018,29 +1082,43 @@ update msg model =
 -- VIEW
 
 
+renderString : String -> Html Msg
+renderString string =
+  Html.p []
+    [ Html.text string ]
+
+
+
 view : Model -> Html Msg
 view model =
-  let
-    _ =
-      (ParseValid () "     q  NaN")
-      |>Debug.log "view input"
-      |>parseZeroOne Shed
-      |>Debug.log "view output"
-  in
-    case model.levelText of
-      Nothing ->
-        Html.div []
-          [ Html.button [ onClick LevelFindFile ] [ Html.text "Load Level File" ]
-          , Html.p [ Attributes.style "white-space" "pre" ]
-            [ Html.text "Hallo!"
-            ]
-          ]
+  case model of
+    Err errors ->
+      Html.div []
+        [ Html.button [ onClick LevelFindFile ] [ Html.text "Load Level File" ]
+        , Html.div [ Attributes.style "white-space" "pre" ]
+          ( List.map renderString errors )
+        ]
 
-      Just levelText ->
-        Html.div []
-          [ Html.button [ onClick <| LevelSave levelText ] [ Html.text "Save Level File" ]
-          , Html.p [ Attributes.style "white-space" "pre" ] [ Html.text levelText ]
-          ]
+    Ok level ->
+      let
+        regexReinflateNewlines =
+          Regex.fromString "[,(){}\\[\\]]|\\\\n"
+          |>Maybe.withDefault Regex.never
+
+        debugStrings =
+          Debug.toString level
+          |>Regex.split regexReinflateNewlines
+          |>Debug.log "debugStrings"
+      in
+      Html.div []
+        [ Html.button [ onClick <| LevelSave "Save TBI dawg" ] [ Html.text "Save Level File" ]
+        , Html.code [] -- [ Attributes.style "white-space" "pre" ]
+          ( ( "Level loaded: "
+            ::debugStrings
+            )
+            |>List.map (\string -> Html.p [] [Html.text string] )
+          )
+        ]
 
 
 

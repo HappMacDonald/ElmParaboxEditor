@@ -1,6 +1,6 @@
 module Size exposing
   ( Size
-  , Maybe
+  , Maybe(..)
   , set
   , getWidth
   , getHeight
